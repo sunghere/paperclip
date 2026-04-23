@@ -24,6 +24,7 @@ export function ApprovalDetail() {
   const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const [commentBody, setCommentBody] = useState("");
+  const [decisionNote, setDecisionNote] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [showRawPayload, setShowRawPayload] = useState(false);
 
@@ -85,9 +86,10 @@ export function ApprovalDetail() {
   };
 
   const approveMutation = useMutation({
-    mutationFn: () => approvalsApi.approve(approvalId!),
+    mutationFn: () => approvalsApi.approve(approvalId!, decisionNote.trim() || undefined),
     onSuccess: () => {
       setError(null);
+      setDecisionNote("");
       refresh();
       navigate(`/approvals/${approvalId}?resolved=approved`, { replace: true });
     },
@@ -95,18 +97,20 @@ export function ApprovalDetail() {
   });
 
   const rejectMutation = useMutation({
-    mutationFn: () => approvalsApi.reject(approvalId!),
+    mutationFn: () => approvalsApi.reject(approvalId!, decisionNote.trim() || undefined),
     onSuccess: () => {
       setError(null);
+      setDecisionNote("");
       refresh();
     },
     onError: (err) => setError(err instanceof Error ? err.message : "Reject failed"),
   });
 
   const revisionMutation = useMutation({
-    mutationFn: () => approvalsApi.requestRevision(approvalId!),
+    mutationFn: () => approvalsApi.requestRevision(approvalId!, decisionNote.trim() || undefined),
     onSuccess: () => {
       setError(null);
+      setDecisionNote("");
       refresh();
     },
     onError: (err) => setError(err instanceof Error ? err.message : "Revision request failed"),
@@ -260,6 +264,20 @@ export function ApprovalDetail() {
             </p>
           </div>
         )}
+        <div className="space-y-2 rounded-lg border border-border/60 bg-muted/20 p-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-medium text-foreground">Decision note</p>
+              <p className="text-[11px] text-muted-foreground">Optional note stored with approve / reject / request revision.</p>
+            </div>
+          </div>
+          <Textarea
+            value={decisionNote}
+            onChange={(e) => setDecisionNote(e.target.value)}
+            placeholder="Why are you approving, rejecting, or requesting changes?"
+            rows={3}
+          />
+        </div>
         <div className="flex flex-wrap items-center gap-2">
           {isActionable && !isBudgetApproval && (
             <>
