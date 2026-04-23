@@ -264,20 +264,22 @@ export function ApprovalDetail() {
             </p>
           </div>
         )}
-        <div className="space-y-2 rounded-lg border border-border/60 bg-muted/20 p-3">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="text-xs font-medium text-foreground">Decision note</p>
-              <p className="text-[11px] text-muted-foreground">Optional note stored with approve / reject / request revision.</p>
+        {isActionable && !isBudgetApproval && (
+          <div className="space-y-2 rounded-lg border border-border/60 bg-muted/20 p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-medium text-foreground">Decision note</p>
+                <p className="text-[11px] text-muted-foreground">Optional note stored with approve / reject / request revision.</p>
+              </div>
             </div>
+            <Textarea
+              value={decisionNote}
+              onChange={(e) => setDecisionNote(e.target.value)}
+              placeholder="Why are you approving, rejecting, or requesting changes?"
+              rows={3}
+            />
           </div>
-          <Textarea
-            value={decisionNote}
-            onChange={(e) => setDecisionNote(e.target.value)}
-            placeholder="Why are you approving, rejecting, or requesting changes?"
-            rows={3}
-          />
-        </div>
+        )}
         <div className="flex flex-wrap items-center gap-2">
           {isActionable && !isBudgetApproval && (
             <>
