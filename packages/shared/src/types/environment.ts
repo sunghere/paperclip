@@ -5,9 +5,28 @@ import type {
   EnvironmentLeaseStatus,
   EnvironmentStatus,
 } from "../constants.js";
+import type { EnvSecretRefBinding } from "./secrets.js";
 
 export interface LocalEnvironmentConfig {
   [key: string]: unknown;
+}
+
+export interface SshEnvironmentConfig {
+  host: string;
+  port: number;
+  username: string;
+  remoteWorkspacePath: string;
+  privateKey: string | null;
+  privateKeySecretRef: EnvSecretRefBinding | null;
+  knownHosts: string | null;
+  strictHostKeyChecking: boolean;
+}
+
+export interface EnvironmentProbeResult {
+  ok: boolean;
+  driver: EnvironmentDriver;
+  summary: string;
+  details: Record<string, unknown> | null;
 }
 
 export interface Environment {
@@ -17,7 +36,7 @@ export interface Environment {
   description: string | null;
   driver: EnvironmentDriver;
   status: EnvironmentStatus;
-  config: LocalEnvironmentConfig;
+  config: Record<string, unknown>;
   metadata: Record<string, unknown> | null;
   createdAt: Date;
   updatedAt: Date;

@@ -31,8 +31,10 @@ export {
   environmentLeaseCleanupStatusSchema,
   createEnvironmentSchema,
   updateEnvironmentSchema,
+  probeEnvironmentConfigSchema,
   type CreateEnvironment,
   type UpdateEnvironment,
+  type ProbeEnvironmentConfig,
 } from "./environment.js";
 export {
   feedbackDataSharingPreferenceSchema,
@@ -196,6 +198,17 @@ export {
   type UpsertIssueDocument,
   type RestoreIssueDocumentRevision,
 } from "./issue.js";
+
+export {
+  createIssueTreeHoldSchema,
+  issueTreeControlModeSchema,
+  issueTreeHoldReleasePolicySchema,
+  previewIssueTreeControlSchema,
+  releaseIssueTreeHoldSchema,
+  type CreateIssueTreeHold,
+  type PreviewIssueTreeControl,
+  type ReleaseIssueTreeHold,
+} from "./issue-tree-control.js";
 
 export {
   createIssueWorkProductSchema,
