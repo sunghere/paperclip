@@ -112,6 +112,8 @@ import { buildExternalAdapters } from "./plugin-loader.js";
 import { getDisabledAdapterTypes } from "../services/adapter-plugin-store.js";
 import { processAdapter } from "./process/index.js";
 import { httpAdapter } from "./http/index.js";
+// Fork-local: codex_oauth_local adapter — see ./codex-oauth-local-hookup.ts
+import { codexOAuthLocalAdapter } from "./codex-oauth-local-hookup.js";
 
 function readConfiguredCommand(config: Record<string, unknown>, fallback: string): string {
   const value = typeof config.command === "string" ? config.command.trim() : "";
@@ -416,6 +418,7 @@ function registerBuiltInAdapters() {
     geminiLocalAdapter,
     openclawGatewayAdapter,
     hermesLocalAdapter,
+    codexOAuthLocalAdapter,
     processAdapter,
     httpAdapter,
   ]) {
