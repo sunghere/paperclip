@@ -1,0 +1,49 @@
+{
+  "name": "@paperclipai/adapter-codex-oauth-local",
+  "version": "0.1.0",
+  "license": "MIT",
+  "private": true,
+  "description": "Paperclip adapter that calls ChatGPT/Codex Responses API directly via OAuth — bypasses codex CLI spawn so usage is independent from main ~/.codex auth.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./server": "./src/server/index.ts",
+    "./ui": "./src/ui/index.ts"
+  },
+  "publishConfig": {
+    "access": "public",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "import": "./dist/index.js"
+      },
+      "./server": {
+        "types": "./dist/server/index.d.ts",
+        "import": "./dist/server/index.js"
+      },
+      "./ui": {
+        "types": "./dist/ui/index.d.ts",
+        "import": "./dist/ui/index.js"
+      }
+    },
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@paperclipai/adapter-utils": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.6.0",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5"
+  }
+}

@@ -178,7 +178,9 @@ A change is done when all are true:
 
 ## 11. Fork-Specific: HenkDz/paperclip
 
-This is a fork of `paperclipai/paperclip` with QoL patches and an **external-only** Hermes adapter story on branch `feat/externalize-hermes-adapter` ([tree](https://github.com/HenkDz/paperclip/tree/feat/externalize-hermes-adapter)).
+> **Working in this fork?** See [`doc/FORK-DEVELOPMENT.md`](doc/FORK-DEVELOPMENT.md) for branching policy, upstream-merge etiquette, and the TDD playbook for fork-only adapters. That file lives outside upstream's tracked set, so it never produces re-merge conflicts.
+
+This is a fork of `paperclipai/paperclip` with QoL minkes and an **external-only** Claude Code adapter story on branch `feat/externalize-claude-code-adapter` ([tree](https://github.com/HenkDz/paperclip/tree/feat/externalize-claude-code-adapter)).
 
 ### Branch Strategy
 
