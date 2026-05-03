@@ -1,4 +1,5 @@
 import type { UIAdapterModule } from "./types";
+import { acpxLocalUIAdapter } from "./acpx-local";
 import { claudeLocalUIAdapter } from "./claude-local";
 import { codexLocalUIAdapter } from "./codex-local";
 import { codexOAuthLocalUIAdapter } from "./codex-oauth-local";
@@ -50,6 +51,7 @@ setDynamicParserResultNotifier(notifyAdapterChange);
 
 function registerBuiltInUIAdapters() {
   for (const adapter of [
+    acpxLocalUIAdapter,
     claudeLocalUIAdapter,
     codexLocalUIAdapter,
     codexOAuthLocalUIAdapter,
