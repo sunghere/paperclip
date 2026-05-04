@@ -1,4 +1,4 @@
-import type { AdapterModelProfileDefinition, ServerAdapterModule } from "./types.js";
+import type { AdapterModelProfileDefinition, AdapterRuntimeCommandSpec, ServerAdapterModule } from "./types.js";
 import { getAdapterSessionManagement } from "@paperclipai/adapter-utils";
 import {
   execute as acpxExecute,
@@ -115,6 +115,44 @@ import { httpAdapter } from "./http/index.js";
 // Fork-local: codex_oauth_local adapter — see ./codex-oauth-local-hookup.ts
 import { codexOAuthLocalAdapter } from "./codex-oauth-local-hookup.js";
 
+function readConfiguredCommand(config: Record<string, unknown>, fallback: string): string {
+  const value = typeof config.command === "string" ? config.command.trim() : "";
+  return value.length > 0 ? value : fallback;
+}
+
+function hasPathSeparator(command: string): boolean {
+  return command.includes("/") || command.includes("\\");
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
+function buildNpmRuntimeCommandSpec(
+  config: Record<string, unknown>,
+  fallbackCommand: string,
+  packageName: string,
+): AdapterRuntimeCommandSpec {
+  const command = readConfiguredCommand(config, fallbackCommand);
+  const canSelfInstall = !hasPathSeparator(command) && command === fallbackCommand;
+  return {
+    command,
+    detectCommand: command,
+    installCommand: canSelfInstall
+      ? `if ! command -v ${shellQuote(command)} >/dev/null 2>&1; then npm install -g ${shellQuote(packageName)}; fi`
+      : null,
+  };
+}
+
+function buildCursorRuntimeCommandSpec(config: Record<string, unknown>): AdapterRuntimeCommandSpec {
+  const command = readConfiguredCommand(config, "agent");
+  return {
+    command,
+    detectCommand: command,
+    installCommand: null,
+  };
+}
+
 function normalizeHermesConfig<T extends { config?: unknown; agent?: unknown }>(ctx: T): T {
   const config =
     ctx && typeof ctx === "object" && "config" in ctx && ctx.config && typeof ctx.config === "object"
@@ -161,6 +199,8 @@ const claudeLocalAdapter: ServerAdapterModule = {
   supportsInstructionsBundle: true,
   instructionsPathKey: "instructionsFilePath",
   requiresMaterializedRuntimeSkills: false,
+  getRuntimeCommandSpec: (config) =>
+    buildNpmRuntimeCommandSpec(config, "claude", "@anthropic-ai/claude-code"),
   agentConfigurationDoc: claudeAgentConfigurationDoc,
   getQuotaWindows: claudeGetQuotaWindows,
 };
@@ -197,6 +237,7 @@ const codexLocalAdapter: ServerAdapterModule = {
   supportsInstructionsBundle: true,
   instructionsPathKey: "instructionsFilePath",
   requiresMaterializedRuntimeSkills: false,
+  getRuntimeCommandSpec: (config) => buildNpmRuntimeCommandSpec(config, "codex", "@openai/codex"),
   agentConfigurationDoc: codexAgentConfigurationDoc,
   getQuotaWindows: codexGetQuotaWindows,
 };
@@ -216,6 +257,7 @@ const cursorLocalAdapter: ServerAdapterModule = {
   supportsInstructionsBundle: true,
   instructionsPathKey: "instructionsFilePath",
   requiresMaterializedRuntimeSkills: true,
+  getRuntimeCommandSpec: buildCursorRuntimeCommandSpec,
   agentConfigurationDoc: cursorAgentConfigurationDoc,
 };
 
@@ -233,6 +275,8 @@ const geminiLocalAdapter: ServerAdapterModule = {
   supportsInstructionsBundle: true,
   instructionsPathKey: "instructionsFilePath",
   requiresMaterializedRuntimeSkills: true,
+  getRuntimeCommandSpec: (config) =>
+    buildNpmRuntimeCommandSpec(config, "gemini", "@google/gemini-cli"),
   agentConfigurationDoc: geminiAgentConfigurationDoc,
 };
 
@@ -262,6 +306,7 @@ const openCodeLocalAdapter: ServerAdapterModule = {
   supportsInstructionsBundle: true,
   instructionsPathKey: "instructionsFilePath",
   requiresMaterializedRuntimeSkills: true,
+  getRuntimeCommandSpec: (config) => buildNpmRuntimeCommandSpec(config, "opencode", "opencode-ai"),
   agentConfigurationDoc: openCodeAgentConfigurationDoc,
 };
 
@@ -280,6 +325,8 @@ const piLocalAdapter: ServerAdapterModule = {
   supportsInstructionsBundle: true,
   instructionsPathKey: "instructionsFilePath",
   requiresMaterializedRuntimeSkills: true,
+  getRuntimeCommandSpec: (config) =>
+    buildNpmRuntimeCommandSpec(config, "pi", "@mariozechner/pi-coding-agent"),
   agentConfigurationDoc: piAgentConfigurationDoc,
 };
 
