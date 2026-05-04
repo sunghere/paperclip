@@ -12,6 +12,7 @@ const mockIssueService = vi.hoisted(() => ({
   getRelationSummaries: vi.fn(),
   listWakeableBlockedDependents: vi.fn(),
   getWakeableParentAfterChildCompletion: vi.fn(),
+  listComments: vi.fn(),
 }));
 
 const mockHeartbeatService = vi.hoisted(() => ({
@@ -164,6 +165,29 @@ async function createApp() {
   return app;
 }
 
+async function createAgentApp(agentId: string) {
+  const [{ errorHandler }, { issueRoutes }] = await Promise.all([
+    vi.importActual<typeof import("../middleware/index.js")>("../middleware/index.js"),
+    vi.importActual<typeof import("../routes/issues.js")>("../routes/issues.js"),
+  ]);
+  const app = express();
+  app.use(express.json());
+  app.use((req, _res, next) => {
+    (req as any).actor = {
+      type: "agent",
+      agentId,
+      companyId: "company-1",
+      runId: null,
+      source: "agent_token",
+      isInstanceAdmin: false,
+    };
+    next();
+  });
+  app.use("/api", issueRoutes({} as any, {} as any));
+  app.use(errorHandler);
+  return app;
+}
+
 function makeIssue(overrides: Record<string, unknown> = {}) {
   return {
     id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
@@ -197,6 +221,7 @@ describe("issue update comment wakeups", () => {
     mockIssueService.getRelationSummaries.mockResolvedValue({ blockedBy: [], blocks: [] });
     mockIssueService.listWakeableBlockedDependents.mockResolvedValue([]);
     mockIssueService.getWakeableParentAfterChildCompletion.mockResolvedValue(null);
+    mockIssueService.listComments.mockResolvedValue([]);
   });
 
   it("includes the new comment in assignment wakes from issue updates", async () => {
@@ -289,5 +314,200 @@ describe("issue update comment wakeups", () => {
         }),
       }),
     );
+  });
+});
+
+describe("GGU-803 self-comment echo guard", () => {
+  const COMMENTER_AGENT_ID = "33333333-3333-4333-8333-333333333333";
+  const ASSIGNEE_AGENT_ID2 = "44444444-4444-4444-8444-444444444444";
+  const MENTIONED_AGENT_ID = "55555555-5555-4555-8555-555555555555";
+
+  beforeEach(() => {
+    vi.resetModules();
+    vi.doUnmock("../routes/issues.js");
+    vi.doUnmock("../routes/authz.js");
+    vi.doUnmock("../middleware/index.js");
+    registerModuleMocks();
+    vi.clearAllMocks();
+    mockIssueService.findMentionedAgents.mockResolvedValue([]);
+    mockIssueService.getRelationSummaries.mockResolvedValue({ blockedBy: [], blocks: [] });
+    mockIssueService.listWakeableBlockedDependents.mockResolvedValue([]);
+    mockIssueService.getWakeableParentAfterChildCompletion.mockResolvedValue(null);
+    mockIssueService.listComments.mockResolvedValue([]);
+  });
+
+  it("suppresses outbound wakes when an agent posts a comment immediately after its own previous comment (POST /comments)", async () => {
+    const existing = makeIssue({
+      assigneeAgentId: ASSIGNEE_AGENT_ID2,
+      assigneeUserId: null,
+      status: "todo",
+    });
+    mockIssueService.getById.mockResolvedValue(existing);
+    mockIssueService.addComment.mockResolvedValue({
+      id: "echo-comment-2",
+      issueId: existing.id,
+      companyId: existing.companyId,
+      body: "이미 done 되어 있음, 추가 작업 없음",
+      authorAgentId: COMMENTER_AGENT_ID,
+      authorUserId: null,
+    });
+    // listComments(desc, limit=2) → newest comment is the one just inserted,
+    // followed by the agent's own previous comment.
+    mockIssueService.listComments.mockResolvedValue([
+      {
+        id: "echo-comment-2",
+        issueId: existing.id,
+        companyId: existing.companyId,
+        authorAgentId: COMMENTER_AGENT_ID,
+        authorUserId: null,
+      },
+      {
+        id: "echo-comment-1",
+        issueId: existing.id,
+        companyId: existing.companyId,
+        authorAgentId: COMMENTER_AGENT_ID,
+        authorUserId: null,
+      },
+    ]);
+    mockIssueService.findMentionedAgents.mockResolvedValue([MENTIONED_AGENT_ID]);
+
+    const res = await request(await createAgentApp(COMMENTER_AGENT_ID))
+      .post(`/api/issues/${existing.id}/comments`)
+      .send({ body: "이미 done 되어 있음, 추가 작업 없음 [@x](agent://" + MENTIONED_AGENT_ID + ")" });
+
+    expect(res.status).toBe(201);
+    // No assignee wake AND no @-mention wake — pure self-echo silenced.
+    expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();
+  });
+
+  it("still wakes mentions/assignee when the previous comment was by a different agent (POST /comments)", async () => {
+    const existing = makeIssue({
+      assigneeAgentId: ASSIGNEE_AGENT_ID2,
+      assigneeUserId: null,
+      status: "todo",
+    });
+    mockIssueService.getById.mockResolvedValue(existing);
+    mockIssueService.addComment.mockResolvedValue({
+      id: "fresh-comment",
+      issueId: existing.id,
+      companyId: existing.companyId,
+      body: "새 정보 추가",
+      authorAgentId: COMMENTER_AGENT_ID,
+      authorUserId: null,
+    });
+    mockIssueService.listComments.mockResolvedValue([
+      {
+        id: "fresh-comment",
+        issueId: existing.id,
+        companyId: existing.companyId,
+        authorAgentId: COMMENTER_AGENT_ID,
+        authorUserId: null,
+      },
+      {
+        id: "prev-by-other",
+        issueId: existing.id,
+        companyId: existing.companyId,
+        authorAgentId: ASSIGNEE_AGENT_ID2,
+        authorUserId: null,
+      },
+    ]);
+    mockIssueService.findMentionedAgents.mockResolvedValue([MENTIONED_AGENT_ID]);
+
+    const res = await request(await createAgentApp(COMMENTER_AGENT_ID))
+      .post(`/api/issues/${existing.id}/comments`)
+      .send({ body: "새 정보 추가" });
+
+    expect(res.status).toBe(201);
+    // Assignee + 1 mention should both be woken.
+    expect(mockHeartbeatService.wakeup).toHaveBeenCalled();
+    const wakedIds = mockHeartbeatService.wakeup.mock.calls.map((c) => c[0]);
+    expect(wakedIds).toContain(ASSIGNEE_AGENT_ID2);
+    expect(wakedIds).toContain(MENTIONED_AGENT_ID);
+  });
+
+  it("still wakes when the previous comment was authored by a user (POST /comments)", async () => {
+    const existing = makeIssue({
+      assigneeAgentId: ASSIGNEE_AGENT_ID2,
+      assigneeUserId: null,
+      status: "todo",
+    });
+    mockIssueService.getById.mockResolvedValue(existing);
+    mockIssueService.addComment.mockResolvedValue({
+      id: "agent-reply",
+      issueId: existing.id,
+      companyId: existing.companyId,
+      body: "ack",
+      authorAgentId: COMMENTER_AGENT_ID,
+      authorUserId: null,
+    });
+    mockIssueService.listComments.mockResolvedValue([
+      {
+        id: "agent-reply",
+        issueId: existing.id,
+        companyId: existing.companyId,
+        authorAgentId: COMMENTER_AGENT_ID,
+        authorUserId: null,
+      },
+      {
+        id: "user-prev",
+        issueId: existing.id,
+        companyId: existing.companyId,
+        authorAgentId: null,
+        authorUserId: "local-board",
+      },
+    ]);
+
+    const res = await request(await createAgentApp(COMMENTER_AGENT_ID))
+      .post(`/api/issues/${existing.id}/comments`)
+      .send({ body: "ack" });
+
+    expect(res.status).toBe(201);
+    expect(mockHeartbeatService.wakeup).toHaveBeenCalledWith(
+      ASSIGNEE_AGENT_ID2,
+      expect.objectContaining({ reason: "issue_commented" }),
+    );
+  });
+
+  it("suppresses outbound wakes on PATCH-with-comment when previous comment was by the same agent", async () => {
+    const existing = makeIssue({
+      assigneeAgentId: ASSIGNEE_AGENT_ID2,
+      assigneeUserId: null,
+      status: "in_progress",
+    });
+    const updated = { ...existing };
+    mockIssueService.getById.mockResolvedValue(existing);
+    mockIssueService.update.mockResolvedValue(updated);
+    mockIssueService.addComment.mockResolvedValue({
+      id: "patch-echo-2",
+      issueId: existing.id,
+      companyId: existing.companyId,
+      body: "DoD 충족, status 재전이",
+      authorAgentId: COMMENTER_AGENT_ID,
+      authorUserId: null,
+    });
+    mockIssueService.listComments.mockResolvedValue([
+      {
+        id: "patch-echo-2",
+        issueId: existing.id,
+        companyId: existing.companyId,
+        authorAgentId: COMMENTER_AGENT_ID,
+        authorUserId: null,
+      },
+      {
+        id: "patch-echo-1",
+        issueId: existing.id,
+        companyId: existing.companyId,
+        authorAgentId: COMMENTER_AGENT_ID,
+        authorUserId: null,
+      },
+    ]);
+    mockIssueService.findMentionedAgents.mockResolvedValue([MENTIONED_AGENT_ID]);
+
+    const res = await request(await createAgentApp(COMMENTER_AGENT_ID))
+      .patch(`/api/issues/${existing.id}`)
+      .send({ comment: "DoD 충족, status 재전이" });
+
+    expect(res.status).toBe(200);
+    expect(mockHeartbeatService.wakeup).not.toHaveBeenCalled();
   });
 });
