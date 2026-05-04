@@ -7555,13 +7555,56 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         const deferredWakeReason = readNonEmptyString(deferredContextSeed.wakeReason);
         // Only human/comment-reopen interactions should revive completed issues;
         // system follow-ups such as retry or cleanup wakes must not reopen closed work.
+        // GGU-803 echo-loop guard: if the assignee already commented on this issue
+        // strictly after the deferred wake's source comment, the user-driven reopen
+        // has already been addressed — do not re-reopen on promotion.
+        let assigneeAlreadyRespondedAfterSourceComment = false;
+        if (
+          deferredCommentIds.length > 0 &&
+          (issue.status === "done" || issue.status === "cancelled")
+        ) {
+          const sourceCommentRows = await tx
+            .select({ createdAt: issueComments.createdAt })
+            .from(issueComments)
+            .where(
+              and(
+                eq(issueComments.companyId, issue.companyId),
+                eq(issueComments.issueId, issue.id),
+                inArray(issueComments.id, deferredCommentIds),
+              ),
+            );
+          const latestSourceCommentAt = sourceCommentRows.reduce<Date | null>(
+            (acc, row) => {
+              const t = row.createdAt instanceof Date ? row.createdAt : new Date(row.createdAt as unknown as string);
+              if (!acc) return t;
+              return t > acc ? t : acc;
+            },
+            null,
+          );
+          if (latestSourceCommentAt) {
+            const laterAgentReply = await tx
+              .select({ id: issueComments.id })
+              .from(issueComments)
+              .where(
+                and(
+                  eq(issueComments.companyId, issue.companyId),
+                  eq(issueComments.issueId, issue.id),
+                  eq(issueComments.authorAgentId, deferred.agentId),
+                  gt(issueComments.createdAt, latestSourceCommentAt),
+                ),
+              )
+              .limit(1);
+            assigneeAlreadyRespondedAfterSourceComment = laterAgentReply.length > 0;
+          }
+        }
         const shouldReopenDeferredCommentWake =
           deferredCommentIds.length > 0 &&
           (issue.status === "done" || issue.status === "cancelled") &&
           (
             deferred.requestedByActorType === "user" ||
             deferredWakeReason === "issue_reopened_via_comment"
-          );
+          ) &&
+          !assigneeAlreadyRespondedAfterSourceComment;
         let reopenedActivity: LogActivityInput | null = null;
 
         if (shouldReopenDeferredCommentWake) {
