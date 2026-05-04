@@ -2740,7 +2740,27 @@ export function issueRoutes(
         const assigneeId = issue.assigneeAgentId;
         const actorIsAgent = actor.actorType === "agent";
         const selfComment = actorIsAgent && actor.actorId === assigneeId;
-        const skipAssigneeCommentWake = selfComment || isClosed;
+        // GGU-803 echo-loop guard: same as POST /comments — if an agent posts
+        // back-to-back comments with no human/user comment in between, this
+        // PATCH-with-comment is most likely a defensive "still done" echo.
+        // Suppress assignee + @-mention wakes; the comment text is preserved.
+        let suppressOutboundWakesAsSelfEcho = false;
+        if (actorIsAgent && !reopened) {
+          try {
+            const recent = await svc.listComments(id, { order: "desc", limit: 2 });
+            const prev = recent.find((c) => c.id !== comment.id) ?? null;
+            if (prev && prev.authorAgentId === actor.actorId && !prev.authorUserId) {
+              suppressOutboundWakesAsSelfEcho = true;
+            }
+          } catch (err) {
+            logger.warn(
+              { err, issueId: id },
+              "self-echo guard (PATCH path): failed to inspect previous comment, continuing without suppression",
+            );
+          }
+        }
+        const skipAssigneeCommentWake =
+          selfComment || isClosed || suppressOutboundWakesAsSelfEcho;
 
         if (assigneeId && !assigneeChanged && (reopened || !skipAssigneeCommentWake)) {
           addWakeup(assigneeId, {
@@ -2780,6 +2800,8 @@ export function issueRoutes(
 
         for (const mentionedId of mentionedIds) {
           if (actor.actorType === "agent" && actor.actorId === mentionedId) continue;
+          // GGU-803 echo-loop guard for the PATCH-with-comment path.
+          if (suppressOutboundWakesAsSelfEcho) continue;
           addWakeup(mentionedId, {
             source: "automation",
             triggerDetail: "system",
@@ -3738,13 +3760,43 @@ export function issueRoutes(
       source: "issue.comment",
     });
 
+    // GGU-803 echo-loop guard: if an agent posts a comment when the immediately
+    // previous comment on the issue was authored by the same agent (and no
+    // human/user comment intervened), suppress all outbound wakes from this
+    // comment. The comment is still recorded for audit, but we do not spawn
+    // assignee or @-mention runs because nothing has changed since the last
+    // time this agent already responded. Defensive "already done" comments are
+    // the primary cause of comment-noise spam (see GGU-778).
+    let suppressOutboundWakesAsSelfEcho = false;
+    if (actor.actorType === "agent" && !reopened) {
+      try {
+        const recent = await svc.listComments(currentIssue.id, {
+          order: "desc",
+          limit: 2,
+        });
+        const prev = recent.find((c) => c.id !== comment.id) ?? null;
+        if (
+          prev &&
+          prev.authorAgentId === actor.actorId &&
+          !prev.authorUserId
+        ) {
+          suppressOutboundWakesAsSelfEcho = true;
+        }
+      } catch (err) {
+        logger.warn(
+          { err, issueId: currentIssue.id },
+          "self-echo guard: failed to inspect previous comment, continuing without suppression",
+        );
+      }
+    }
+
     // Merge all wakeups from this comment into one enqueue per agent to avoid duplicate runs.
     void (async () => {
       const wakeups = new Map<string, Parameters<typeof heartbeat.wakeup>[1]>();
       const assigneeId = currentIssue.assigneeAgentId;
       const actorIsAgent = actor.actorType === "agent";
       const selfComment = actorIsAgent && actor.actorId === assigneeId;
-      const skipWake = selfComment || isClosed;
+      const skipWake = selfComment || isClosed || suppressOutboundWakesAsSelfEcho;
       if (assigneeId && (reopened || !skipWake)) {
         if (reopened) {
           wakeups.set(assigneeId, {
@@ -3811,6 +3863,9 @@ export function issueRoutes(
       for (const mentionedId of mentionedIds) {
         if (wakeups.has(mentionedId)) continue;
         if (actorIsAgent && actor.actorId === mentionedId) continue;
+        // GGU-803 echo-loop guard: also skip @-mention wakes from a consecutive
+        // self-comment by the same agent (no new context since the prior comment).
+        if (suppressOutboundWakesAsSelfEcho) continue;
         wakeups.set(mentionedId, {
           source: "automation",
           triggerDetail: "system",
