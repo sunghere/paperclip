@@ -925,6 +925,72 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     expect(issue?.checkoutRunId).toBe(runId);
   });
 
+  // Regression: dispatcher must dispatch a brand-new wakeup even when the
+  // process-loss retry that was queued moments earlier got cancelled by the
+  // stale-issue gate (e.g. the issue completed elsewhere just before the retry
+  // could claim). Real-world incident: GGU-573 process_lost → retry queued →
+  // 0.067 s later cancelled with errorCode `issue_terminal_status`. The agent
+  // then sat dormant for 11 hours — no subsequent wakeup forked a child even
+  // though `enqueueWakeup` calls `startNextQueuedRunForAgent` at its tail.
+  // The fix this test guards: after the retry run is cancelled, the next
+  // wakeup must produce a queued run that gets claimed (status: running).
+  it("dispatches a fresh wakeup after a process-loss retry is cancelled by the stale-issue gate", async () => {
+    const { agentId, runId, issueId } = await seedRunFixture({
+      processPid: 999_999_999,
+      agentStatus: "running",
+    });
+    const heartbeat = heartbeatService(db);
+
+    // Simulate the issue reaching a terminal state in parallel with the
+    // process-loss reap (e.g. the user marked it done while the retry was
+    // being queued).
+    await db
+      .update(issues)
+      .set({ status: "done", updatedAt: new Date() })
+      .where(eq(issues.id, issueId));
+
+    const reap = await heartbeat.reapOrphanedRuns();
+    expect(reap.reaped).toBe(1);
+    expect(reap.runIds).toEqual([runId]);
+
+    // The retry run was queued by enqueueProcessLossRetry; the immediate
+    // startNextQueuedRunForAgent inside reapOrphanedRuns will try to claim it
+    // and the stale-issue gate will cancel it.
+    const runsAfterReap = await db
+      .select()
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.agentId, agentId));
+    expect(runsAfterReap).toHaveLength(2);
+    const failed = runsAfterReap.find((r) => r.id === runId);
+    const retry = runsAfterReap.find((r) => r.id !== runId);
+    expect(failed?.status).toBe("failed");
+    expect(retry?.status).toBe("cancelled");
+    expect(retry?.errorCode).toBe("issue_terminal_status");
+
+    // A new wakeup arrives — fresh manual recovery from the operator, with
+    // no issue context (mimicking POST /agents/:id/wakeup with reason set).
+    const newWakeRun = await heartbeat.wakeup(agentId, {
+      source: "on_demand",
+      triggerDetail: "manual",
+      reason: "post_stale_cancel_recovery",
+      contextSnapshot: { wakeReason: "manual_recovery" },
+    });
+    expect(newWakeRun).not.toBeNull();
+    expect(newWakeRun?.id).toBeTypeOf("string");
+
+    // After enqueueWakeup completes the run must have been claimed by the
+    // dispatcher's startNextQueuedRunForAgent tail-call (status: running),
+    // proving that a stale-cancelled retry does NOT poison subsequent
+    // dispatches for the same agent.
+    const finalRun = await db
+      .select()
+      .from(heartbeatRuns)
+      .where(eq(heartbeatRuns.id, newWakeRun!.id))
+      .then((rows) => rows[0] ?? null);
+    expect(finalRun?.status).toBe("running");
+    expect(finalRun?.startedAt).not.toBeNull();
+  });
+
   it("releases active environment leases when an orphaned run is reaped", async () => {
     const { runId, issueId, companyId } = await seedRunFixture({
       processPid: 999_999_999,
