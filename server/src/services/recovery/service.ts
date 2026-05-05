@@ -11,6 +11,7 @@ import {
   agents,
   agentWakeupRequests,
   approvals,
+  assets,
   companies,
   heartbeatRunEvents,
   heartbeatRunWatchdogDecisions,
@@ -62,10 +63,14 @@ const DEFERRED_WAKE_CONTEXT_KEY = "_paperclipWakeContext";
 // Batch workflows (e.g. Image Spec multi-frame generation) make real progress
 // every heartbeat and would otherwise trigger a recovery issue after just two
 // productive heartbeats. Floor the override at 60s to keep the exemption from
-// being effectively disabled by misconfiguration.
+// being effectively disabled by misconfiguration. Distinguish "unset" from
+// "explicitly 0" so an operator who sets the env var to `0` lands at the 60s
+// floor rather than silently falling back to the 30-minute default.
 export const STRANDED_RECENT_PROGRESS_EXEMPTION_MS = Math.max(
   60_000,
-  Number(process.env.STRANDED_RECENT_PROGRESS_EXEMPTION_MS) || 30 * 60 * 1000,
+  process.env.STRANDED_RECENT_PROGRESS_EXEMPTION_MS !== undefined
+    ? Number(process.env.STRANDED_RECENT_PROGRESS_EXEMPTION_MS)
+    : 30 * 60 * 1000,
 );
 
 type RecoveryWakeupOptions = {
@@ -394,9 +399,13 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
   }
 
   // GGU-809: visible-progress signal for stranded-recovery escalation guard.
-  // Returns true if the assignee posted a comment, OR any attachment was added
-  // to the issue, within `windowMs`. Used to suppress false-positive recovery
-  // issues for batch workflows that genuinely advance every heartbeat.
+  // Returns true if the assignee posted a comment, OR the assignee uploaded an
+  // attachment, within `windowMs`. The attachment check joins through `assets`
+  // because `issue_attachments` itself does not store an author column —
+  // authorship lives on `assets.created_by_agent_id`. Both signals are scoped
+  // to the assignee so a third party (human reviewer, another agent, an
+  // automated pipeline) uploading a file or commenting cannot indefinitely
+  // suppress escalation for a genuinely stuck assignee.
   async function hasRecentVisibleProgress(
     companyId: string,
     issueId: string,
@@ -421,10 +430,12 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       db
         .select({ id: issueAttachments.id })
         .from(issueAttachments)
+        .innerJoin(assets, eq(issueAttachments.assetId, assets.id))
         .where(
           and(
             eq(issueAttachments.companyId, companyId),
             eq(issueAttachments.issueId, issueId),
+            eq(assets.createdByAgentId, assigneeAgentId),
             gt(issueAttachments.createdAt, since),
           ),
         )

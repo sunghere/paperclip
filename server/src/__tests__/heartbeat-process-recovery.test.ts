@@ -7,6 +7,7 @@ import {
   agents,
   agentRuntimeState,
   agentWakeupRequests,
+  assets,
   budgetPolicies,
   companySkills,
   companies,
@@ -18,6 +19,7 @@ import {
   environments,
   heartbeatRunEvents,
   heartbeatRuns,
+  issueAttachments,
   issueComments,
   issueDocuments,
   issueRelations,
@@ -313,6 +315,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     await db.delete(costEvents);
     await db.delete(environmentLeases);
     await db.delete(environments);
+    await db.delete(issueAttachments);
     await db.delete(issueComments);
     await db.delete(issueDocuments);
     await db.delete(documentRevisions);
@@ -321,6 +324,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     await db.delete(issueTreeHoldMembers);
     await db.delete(issueTreeHolds);
     for (let attempt = 0; attempt < 5; attempt += 1) {
+      await db.delete(issueAttachments);
       await db.delete(issueComments);
       await db.delete(issueDocuments);
       try {
@@ -344,6 +348,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     }
     await db.delete(agentWakeupRequests);
     await db.delete(budgetPolicies);
+    await db.delete(assets);
     for (let attempt = 0; attempt < 5; attempt += 1) {
       await db.delete(agentRuntimeState);
       try {
@@ -2465,6 +2470,111 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       body: "old progress note",
       createdAt: stale,
       updatedAt: stale,
+    });
+    const heartbeat = heartbeatService(db);
+
+    const result = await heartbeat.reconcileStrandedAssignedIssues();
+    expect(result.escalated).toBe(1);
+    expect(result.recentProgressExempted).toBe(0);
+    expect(result.continuationRequeued).toBe(0);
+
+    const issue = await db.select().from(issues).where(eq(issues.id, issueId)).then((rows) => rows[0] ?? null);
+    expect(issue?.status).toBe("blocked");
+  });
+
+  it("exempts stranded-recovery escalation when assignee uploaded a recent attachment (GGU-809)", async () => {
+    const { companyId, agentId, issueId, runId } = await seedStrandedIssueFixture({
+      status: "in_progress",
+      runStatus: "succeeded",
+      retryReason: "issue_continuation_needed",
+      runSource: "issue.productive_terminal_continuation_recovery",
+      livenessState: "advanced",
+    });
+    // A recent attachment uploaded by the assignee agent should suppress the
+    // repeat-productive escalation (matches the "frame N/M emitted as a binary"
+    // batch pattern that motivated GGU-809 in the first place).
+    const assetId = randomUUID();
+    await db.insert(assets).values({
+      id: assetId,
+      companyId,
+      provider: "local",
+      objectKey: `test/${assetId}.png`,
+      contentType: "image/png",
+      byteSize: 1024,
+      sha256: "deadbeef",
+      createdByAgentId: agentId,
+    });
+    await db.insert(issueAttachments).values({
+      companyId,
+      issueId,
+      assetId,
+    });
+    const heartbeat = heartbeatService(db);
+
+    const result = await heartbeat.reconcileStrandedAssignedIssues();
+    expect(result.escalated).toBe(0);
+    expect(result.recentProgressExempted).toBe(1);
+    expect(result.continuationRequeued).toBe(1);
+    expect(result.issueIds).toEqual([issueId]);
+
+    const issue = await db.select().from(issues).where(eq(issues.id, issueId)).then((rows) => rows[0] ?? null);
+    expect(issue?.status).toBe("in_progress");
+
+    const recoveryIssues = await db
+      .select()
+      .from(issues)
+      .where(and(eq(issues.companyId, companyId), eq(issues.originKind, "stranded_issue_recovery")));
+    expect(recoveryIssues).toHaveLength(0);
+
+    const runs = await db.select().from(heartbeatRuns).where(eq(heartbeatRuns.agentId, agentId));
+    expect(runs).toHaveLength(2);
+    const retryRun = runs.find((row) => row.id !== runId);
+    expect(retryRun?.contextSnapshot as Record<string, unknown> | undefined).toMatchObject({
+      issueId,
+      retryReason: "issue_continuation_needed",
+      source: "issue.productive_terminal_continuation_recovery",
+    });
+  });
+
+  it("still escalates stranded-recovery work when a recent attachment was uploaded by a different actor (GGU-809)", async () => {
+    const { companyId, agentId, issueId } = await seedStrandedIssueFixture({
+      status: "in_progress",
+      runStatus: "succeeded",
+      retryReason: "issue_continuation_needed",
+      runSource: "issue.productive_terminal_continuation_recovery",
+      livenessState: "advanced",
+    });
+    // Attachment authored by a *different* agent (e.g. a helper agent or a
+    // human reviewer hitting the API as a separate identity) must NOT count
+    // as visible progress for the stranded assignee. Otherwise a third-party
+    // upload could indefinitely suppress escalation for a stuck agent.
+    const otherAgentId = randomUUID();
+    await db.insert(agents).values({
+      id: otherAgentId,
+      companyId,
+      name: "OtherAgent",
+      role: "engineer",
+      status: "idle",
+      adapterType: "codex_local",
+      adapterConfig: {},
+      runtimeConfig: {},
+      permissions: {},
+    });
+    const assetId = randomUUID();
+    await db.insert(assets).values({
+      id: assetId,
+      companyId,
+      provider: "local",
+      objectKey: `test/${assetId}.png`,
+      contentType: "image/png",
+      byteSize: 1024,
+      sha256: "cafebabe",
+      createdByAgentId: otherAgentId,
+    });
+    await db.insert(issueAttachments).values({
+      companyId,
+      issueId,
+      assetId,
     });
     const heartbeat = heartbeatService(db);
 
